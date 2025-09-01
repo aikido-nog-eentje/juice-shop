@@ -2,4 +2,4 @@
 
 phpinfo();
 
-echo "info";
+echo "infoski";
