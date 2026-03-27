@@ -28,7 +28,10 @@ module.exports = function productReviews () {
             () => {
               // Artificial wait for timing attack challenge
               setTimeout(function () {
-                db.reviews.findOne({ _id: id }).then((review: Review) => {
+                // Fix: Wrap id with $eq operator to prevent NoSQL injection
+                // Without $eq, if id is an object like { $ne: null }, MongoDB would treat it as a query operator
+                // With $eq, the id is treated as a literal value, preventing operator injection
+                db.reviews.findOne({ _id: { $eq: id } }).then((review: Review) => {
                   const likedBy = review.likedBy
                   likedBy.push(user.data.email)
                   let count = 0
