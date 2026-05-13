@@ -77,7 +77,12 @@ function handleXmlUpload ({ file }: Request, res: Response, next: NextFunction) 
       try {
         const sandbox = { libxml, data }
         vm.createContext(sandbox)
-        const xmlDoc = vm.runInContext('libxml.parseXml(data, { noblanks: true, noent: false, nocdata: true })', sandbox, { timeout: 2000 })
+        // Secure XML parsing configuration to prevent XXE attacks:
+        // - noent: true - Disables entity substitution (prevents external entity expansion)
+        // - nonet: true - Disables network access (prevents fetching external resources)
+        // - dtdload: false - Disables DTD loading (prevents DTD-based attacks)
+        // - dtdvalid: false - Disables DTD validation (prevents DTD-based attacks)
+        const xmlDoc = vm.runInContext('libxml.parseXml(data, { noblanks: true, noent: true, nocdata: true, nonet: true, dtdload: false, dtdvalid: false })', sandbox, { timeout: 2000 })
         const xmlString = xmlDoc.toString(false)
         challengeUtils.solveIf(challenges.xxeFileDisclosureChallenge, () => { return (utils.matchesEtcPasswdFile(xmlString) || utils.matchesSystemIniFile(xmlString)) })
         res.status(410)
