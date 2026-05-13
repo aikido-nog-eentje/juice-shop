@@ -138,15 +138,48 @@ module.exports = function placeOrder () {
 
           if (req.body.UserId) {
             if (req.body.orderDetails && req.body.orderDetails.paymentId === 'wallet') {
-              const wallet = await WalletModel.findOne({ where: { UserId: req.body.UserId } })
-              if ((wallet != null) && wallet.balance >= totalPrice) {
-                WalletModel.decrement({ balance: totalPrice }, { where: { UserId: req.body.UserId } }).catch((error: unknown) => {
-                  next(error)
-                })
-              } else {
-                next(new Error('Insufficient wallet balance.'))
+              // SECURITY FIX: Prevent wallet balance check-to-decrement race condition
+              // 
+              // Previously, this code performed two separate operations:
+              // 1. Read wallet balance with findOne()
+              // 2. Decrement balance with decrement()
+              // 
+              // This allowed concurrent checkout requests to both read the same balance,
+              // both pass the sufficiency check, and both decrement the wallet - causing
+              // double-spending and allowing users to place more orders than their balance permits.
+              //
+              // FIX: Use a single atomic UPDATE with a WHERE clause that enforces balance >= totalPrice.
+              // The database will only update (and return affectedRows > 0) if the condition is met.
+              // This prevents the time-of-check/time-of-use (TOCTOU) race condition.
+              const [affectedRows] = await WalletModel.decrement(
+                { balance: totalPrice },
+                {
+                  where: {
+                    UserId: req.body.UserId,
+                    balance: {
+                      [require('sequelize').Op.gte]: totalPrice  // Only decrement if balance >= totalPrice
+                    }
+                  }
+                }
+              )
+              
+              // Check if the atomic decrement succeeded
+              // affectedRows === 0 means either:
+              // - The wallet doesn't exist for this user, OR
+              // - The balance was insufficient (< totalPrice)
+              if (affectedRows === 0) {
+                // Distinguish between the two failure cases for better error messaging
+                const wallet = await WalletModel.findOne({ where: { UserId: req.body.UserId } })
+                if (wallet == null) {
+                  next(new Error('Wallet not found.'))
+                } else {
+                  next(new Error('Insufficient wallet balance.'))
+                }
+                return  // Stop processing - do not create the order
               }
+              // If we reach here, the wallet was successfully debited atomically
             }
+            // Credit bonus points to the wallet (separate operation, no race condition risk here)
             WalletModel.increment({ balance: totalPoints }, { where: { UserId: req.body.UserId } }).catch((error: unknown) => {
               next(error)
             })
